@@ -1,0 +1,6 @@
+{
+  "name": "ScorePilot",
+  "description": "Official quiz scoreboard for DCSE, CDLU Sirsa. Supports multiple rounds, leaderboard standings, and persistent local storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
