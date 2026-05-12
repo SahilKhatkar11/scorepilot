@@ -12,7 +12,7 @@
 ## 🌐 Live Demo
 
 Try the live version of the app here:  
-👉 [PDFPilot Live](https://sahilkhatkar11.github.io/scorepilot/)
+👉 [ScorePilot Live](https://sahilkhatkar11.github.io/scorepilot/)
 
 No installation required — just open the link and start using the app instantly.
 
