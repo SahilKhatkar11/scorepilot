@@ -28,9 +28,12 @@ import {
   ExternalLink,
   Info,
   HelpCircle,
-  ChevronRight
+  ChevronRight,
+  FileDown,
+  FileSpreadsheet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { jsPDF } from 'jspdf';
 
 interface Team {
   id: string;
@@ -406,8 +409,9 @@ export default function App() {
       setShowWinnerPopup(false);
       setShowFinalDashboard(true);
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    }, 4000);
+    }, 3000);
   }, [calculatedScores]);
+
 
   const clearCalculatedScores = useCallback(() => {
     pushToHistory();
@@ -435,10 +439,387 @@ export default function App() {
   const winner = sortedTeams[0];
   const allTeamsCalculated = teams.length > 0 && teams.every(t => calculatedScores[t.id] !== undefined);
 
+  const exportToPDF = useCallback(() => {
+    const isLandscape = teams.length > 5;
+    const doc = new jsPDF({
+      orientation: isLandscape ? 'l' : 'p',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 15;
+    let currentY = 15;
+
+    // Helper for text truncation
+    const truncateText = (text: string, maxWidth: number, fontSize: number) => {
+      doc.setFontSize(fontSize);
+      let str = text;
+      if (doc.getTextWidth(str) <= maxWidth) return str;
+      while (str.length > 0 && doc.getTextWidth(str + '...') > maxWidth) {
+        str = str.slice(0, -1);
+      }
+      return str + '...';
+    };
+
+    // Helper to draw standard cell with border
+    const drawTableCell = (
+      text: string, 
+      x: number, 
+      y: number, 
+      width: number, 
+      height: number, 
+      options: { 
+        align?: 'left' | 'center' | 'right'; 
+        isBold?: boolean; 
+        fontSize?: number; 
+        textColor?: number[]; 
+        bgColor?: number[] | null; 
+        borderWidth?: number;
+        borderColor?: number[];
+      } = {}
+    ) => {
+      const {
+        align = 'center',
+        isBold = false,
+        fontSize = 9,
+        textColor = [15, 23, 42],
+        bgColor = null,
+        borderWidth = 0.15,
+        borderColor = [226, 232, 240] // slate-200
+      } = options;
+
+      // Fill background
+      if (bgColor) {
+        doc.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
+        doc.rect(x, y, width, height, 'F');
+      }
+
+      // Draw Borders
+      doc.setDrawColor(borderColor[0], borderColor[1], borderColor[2]);
+      doc.setLineWidth(borderWidth);
+      doc.rect(x, y, width, height, 'D');
+
+      // Set font & color
+      doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+      doc.setFontSize(fontSize);
+      doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+
+      // Truncate text to avoid overlap
+      const truncated = truncateText(text, width - 2, fontSize);
+
+      // Calculate positioning
+      let textX = x + 1;
+      if (align === 'center') {
+        textX = x + (width - doc.getTextWidth(truncated)) / 2;
+      } else if (align === 'right') {
+        textX = x + width - doc.getTextWidth(truncated) - 1;
+      }
+
+      const textY = y + (height / 2) + (fontSize * 0.35 / 2.83); // Center vertically approx
+      doc.text(truncated, textX, textY);
+    };
+
+    const drawPageLink = (isFirstPage: boolean) => {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      if (isFirstPage) {
+        doc.setTextColor(148, 163, 184); // slate-400 (light color for dark header banner)
+      } else {
+        doc.setTextColor(59, 130, 246); // blue-500
+      }
+      const linkText = 'ScorePilot';
+      const linkWidth = doc.getTextWidth(linkText);
+      const x = pageWidth - margin - linkWidth;
+      const y = isFirstPage ? 12 : 10;
+      doc.textWithLink(linkText, x, y, { url: 'https://sahilkhatkar11.github.io/scorepilot/' });
+
+      // Optional underline to make it clear it's a link
+      if (isFirstPage) {
+        doc.setDrawColor(148, 163, 184);
+      } else {
+        doc.setDrawColor(59, 130, 246);
+      }
+      doc.setLineWidth(0.2);
+      doc.line(x, y + 0.6, x + linkWidth, y + 0.6);
+    };
+
+    // Header Banner
+    doc.setFillColor(15, 23, 42); // slate-900
+    doc.rect(0, 0, pageWidth, 26, 'F');
+
+    // App Header text (dynamic competition name)
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text((quizTitle || 'Untitled Scoreboard').toUpperCase(), margin, 12);
+
+    drawPageLink(true);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(148, 163, 184); // slate-400
+    const dateStr = new Date().toLocaleString('en-US', { 
+      dateStyle: 'medium', 
+      timeStyle: 'short' 
+    });
+    doc.text(`Generated on: ${dateStr}`, margin, 17);
+    doc.text('Professional scoring analytics sheet', margin, 21);
+
+    // Dynamic color accent band
+    doc.setFillColor(59, 130, 246); // blue-500
+    doc.rect(0, 26, pageWidth, 1.5, 'F');
+
+    currentY = 36;
+
+    // Overview Statistics
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139); // slate-500
+    doc.text(`Total Competitors: ${teams.length}  |  Total Rounds Tracked: ${rounds}`, margin, currentY);
+    currentY += 8;
+
+    // Winner Box (if winner exists)
+    if (winner) {
+      const winnerScore = calculatedScores[winner.id] !== undefined ? calculatedScores[winner.id] : 0;
+      
+      doc.setFillColor(254, 243, 199); // amber-100
+      doc.setDrawColor(251, 191, 36); // amber-400
+      doc.rect(margin, currentY, pageWidth - 2 * margin, 20, 'FD');
+
+      // Left bar highlight
+      doc.setFillColor(245, 158, 11); // amber-500
+      doc.rect(margin, currentY, 3.5, 20, 'F');
+
+      // Text
+      doc.setTextColor(146, 64, 14); // amber-800
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('CHAMPION PLATINUM LIGHTNING', margin + 7, currentY + 6);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.setTextColor(15, 23, 42); // slate-900
+      doc.text(`${winner.name.toUpperCase()}`, margin + 7, currentY + 14);
+
+      // Score on the right
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.setTextColor(217, 119, 6); // amber-600
+      const scoreText = `${winnerScore} POINTS`;
+      const scoreWidth = doc.getTextWidth(scoreText);
+      doc.text(scoreText, pageWidth - margin - 8 - scoreWidth, currentY + 12);
+
+      currentY += 28;
+    }
+
+    // detailed score sheet header
+    doc.setTextColor(15, 23, 42);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('COMPLETE ROUND-BY-ROUND SCOREBOARD', margin, currentY);
+    currentY += 5;
+
+    // Columns calculations
+    const printableWidth = pageWidth - 2 * margin;
+    const col0Width = 22; // ROUND col width
+    const teamColWidth = (printableWidth - col0Width) / teams.length;
+    const rowHeight = 8.5;
+
+    // Drawing Table Header helper
+    const drawTableHeader = (y: number) => {
+      const headerBg = [30, 41, 59]; // slate-800
+      const headerTextColor = [255, 255, 255];
+
+      drawTableCell('ROUND', margin, y, col0Width, rowHeight, {
+        isBold: true,
+        bgColor: headerBg,
+        textColor: headerTextColor,
+        fontSize: 8.5
+      });
+
+      teams.forEach((team, idx) => {
+        const x = margin + col0Width + idx * teamColWidth;
+        drawTableCell(team.name.toUpperCase(), x, y, teamColWidth, rowHeight, {
+          isBold: true,
+          bgColor: headerBg,
+          textColor: headerTextColor,
+          fontSize: 8.5
+        });
+      });
+    };
+
+    // Draw header initially
+    drawTableHeader(currentY);
+    currentY += rowHeight;
+
+    // Draw row content
+    for (let rIndex = 0; rIndex < rounds; rIndex++) {
+      if (currentY + rowHeight > pageHeight - 18) {
+        doc.addPage();
+        drawPageLink(false);
+        currentY = 15;
+        drawTableHeader(currentY);
+        currentY += rowHeight;
+      }
+
+      const isEven = rIndex % 2 === 0;
+      const rowBg = isEven ? [248, 250, 252] : [255, 255, 255];
+
+      // Round cell
+      drawTableCell(`Round #${rIndex + 1}`, margin, currentY, col0Width, rowHeight, {
+        isBold: true,
+        bgColor: rowBg,
+        textColor: [100, 116, 139],
+        align: 'center'
+      });
+
+      // Team scores
+      teams.forEach((team, idx) => {
+        const x = margin + col0Width + idx * teamColWidth;
+        const score = getScore(team.id, rIndex);
+        drawTableCell(String(score), x, currentY, teamColWidth, rowHeight, {
+          bgColor: rowBg,
+          textColor: [30, 41, 59],
+          align: 'center'
+        });
+      });
+
+      currentY += rowHeight;
+    }
+
+    // Draw Total Row
+    if (currentY + rowHeight > pageHeight - 18) {
+      doc.addPage();
+      drawPageLink(false);
+      currentY = 15;
+      drawTableHeader(currentY);
+      currentY += rowHeight;
+    }
+
+    const totalBg = [241, 245, 249]; // slate-100
+    drawTableCell('TOTALS', margin, currentY, col0Width, rowHeight, {
+      isBold: true,
+      bgColor: totalBg,
+      textColor: [15, 23, 42],
+      align: 'center',
+      borderWidth: 0.45,
+      borderColor: [100, 116, 139] // slate-500
+    });
+
+    teams.forEach((team, idx) => {
+      const x = margin + col0Width + idx * teamColWidth;
+      const total = calculatedScores[team.id] !== undefined ? calculatedScores[team.id] : 0;
+      drawTableCell(String(total), x, currentY, teamColWidth, rowHeight, {
+        isBold: true,
+        bgColor: totalBg,
+        textColor: [29, 78, 216], // blue-700
+        align: 'center',
+        borderWidth: 0.45,
+        borderColor: [100, 116, 139] // slate-500
+      });
+    });
+
+    currentY += rowHeight + 10;
+
+    // Footer signature line
+    if (currentY + 15 > pageHeight - 10) {
+      doc.addPage();
+      drawPageLink(false);
+      currentY = 15;
+    }
+
+    doc.setDrawColor(226, 232, 240); // slate-200
+    doc.setLineWidth(0.3);
+    doc.line(margin, currentY, pageWidth - margin, currentY);
+    currentY += 5;
+
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8);
+    doc.setTextColor(148, 163, 184); // slate-400
+    doc.text('Generated dynamically with ScorePilot. Tracking, scoring, and analytics for any game.', margin, currentY);
+    
+    doc.setFont('helvetica', 'normal');
+    doc.text('Author: Sahil Khatkar', pageWidth - margin - doc.getTextWidth('Author: Sahil Khatkar'), currentY);
+
+    const fileName = `${quizTitle ? quizTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase() : 'scorepilot'}_scoreboard.pdf`;
+    doc.save(fileName);
+  }, [teams, rounds, calculatedScores, quizTitle, winner, getScore]);
+
+  const exportToCSV = useCallback(() => {
+    const csvRows: string[][] = [];
+
+    const title = quizTitle || 'Untitled Scoreboard';
+    const dateStr = new Date().toLocaleString('en-US', { 
+      dateStyle: 'medium', 
+      timeStyle: 'short' 
+    });
+
+    csvRows.push(['SCOREMASTER REPORT', title]);
+    csvRows.push(['Generated on', dateStr]);
+    csvRows.push(['Total Competitors', String(teams.length)]);
+    csvRows.push(['Total Rounds Tracked', String(rounds)]);
+    csvRows.push([]); // blank separator
+
+    // Table Header
+    const headerRow = ['ROUND'];
+    teams.forEach(team => {
+      headerRow.push(team.name.toUpperCase());
+    });
+    csvRows.push(headerRow);
+
+    // Table Rows (each round)
+    for (let rIndex = 0; rIndex < rounds; rIndex++) {
+      const row = [`Round #${rIndex + 1}`];
+      teams.forEach(team => {
+        const score = getScore(team.id, rIndex);
+        row.push(String(score));
+      });
+      csvRows.push(row);
+    }
+
+    // Divider blank line before total row
+    csvRows.push([]);
+
+    // Total Row
+    const totalRow = ['TOTAL'];
+    teams.forEach(team => {
+      const total = calculatedScores[team.id] || 0;
+      totalRow.push(String(total));
+    });
+    csvRows.push(totalRow);
+
+    // Escape CSV cell function
+    const escapeCSVCell = (val: string) => {
+      if (val.includes(',') || val.includes('"') || val.includes('\n') || val.includes('\r')) {
+        return `"${val.replace(/"/g, '""')}"`;
+      }
+      return val;
+    };
+
+    // Construct the CSV content
+    const csvContent = csvRows
+      .map(row => row.map(escapeCSVCell).join(','))
+      .join('\r\n');
+
+    // Trigger download
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    const filename = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_scoreboard.csv`;
+    link.setAttribute('download', filename);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [quizTitle, teams, rounds, getScore, calculatedScores]);
+
   if (!isLoaded) return null;
 
   return (
-    <div className={`min-h-screen transition-colors duration-500 ${isDarkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'} font-sans relative`}>
+    <div className={`min-h-screen w-full max-w-full overflow-x-hidden transition-colors duration-500 ${isDarkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'} font-sans relative`}>
       {/* Background Glows for Dark Mode */}
       {isDarkMode && (
         <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
@@ -469,33 +850,35 @@ export default function App() {
             animate={{ x: 0 }}
             exit={{ x: '-100%' }}
             transition={{ type: 'spring', damping: 30, stiffness: 350 }}
-            className={`fixed left-0 top-0 bottom-0 w-[85vw] sm:w-80 shadow-2xl z-50 overflow-hidden flex flex-col border-r transition-colors duration-300 ${
+            className={`fixed left-0 top-0 bottom-0 w-[60vw] sm:w-72 md:w-80 shadow-2xl z-50 overflow-hidden flex flex-col border-r transition-colors duration-300 ${
               isDarkMode 
                 ? 'bg-[#0f172a] border-white/5' 
                 : 'bg-white border-gray-200/60'
             }`}
           >
             {/* Sidebar Header/Logo - Pinned */}
-            <div className={`p-6 border-b flex items-center justify-between shrink-0 transition-colors duration-300 ${
+            <div className={`p-4 sm:p-6 border-b flex items-center justify-between shrink-0 transition-colors duration-300 ${
               isDarkMode ? 'border-white/5 bg-blue-950/30' : 'border-gray-200/60 bg-white/40'
             }`}>
-              <ScorePilotLogo isDarkMode={isDarkMode} />
+              <ScorePilotLogo isDarkMode={isDarkMode} className="scale-90 origin-left sm:scale-100" />
               <button 
                 onClick={() => setIsSidebarOpen(false)}
-                className={`p-2 rounded-xl transition-colors group ${isDarkMode ? 'hover:bg-blue-900/40' : 'hover:bg-slate-100'}`}
+                className={`p-1.5 sm:p-2 rounded-xl transition-colors group ${isDarkMode ? 'hover:bg-blue-900/40' : 'hover:bg-slate-100'}`}
                 type="button"
               >
-                <X className={`w-5 h-5 transition-colors ${isDarkMode ? 'text-blue-400 group-hover:text-white' : 'text-slate-400 group-hover:text-slate-600'}`} />
+                <X className={`w-4 h-4 sm:w-5 sm:h-5 transition-colors ${isDarkMode ? 'text-blue-400 group-hover:text-white' : 'text-slate-400 group-hover:text-slate-600'}`} />
               </button>
             </div>
 
             {/* Sidebar Body - Scrollable */}
-            <div className="flex-1 p-6 space-y-8 overflow-y-auto custom-scrollbar">
+            <div className="flex-1 p-4 sm:p-6 space-y-6 sm:space-y-8 overflow-y-auto custom-scrollbar">
               <section>
                 <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 dark:text-blue-400/60 mb-3 flex items-center gap-2">
                   <Info className="w-3 h-3" /> About ScorePilot
                 </h2>
-                <p className="text-sm text-gray-500 dark:text-slate-300 leading-relaxed">
+                <p className={`text-sm font-normal leading-relaxed transition-colors ${
+                  isDarkMode ? 'text-slate-300' : 'text-slate-600'
+                }`}>
                   Your versatile companion for any competition. Track complex scoring across multiple rounds for games, sports, quizzes, or tournaments with a fluid, intuitive interface.
                 </p>
               </section>
@@ -536,7 +919,7 @@ export default function App() {
             </div>
 
             {/* Sidebar Footer - Pinned */}
-            <div className={`p-6 border-t shrink-0 space-y-6 transition-colors duration-300 ${
+            <div className={`p-4 sm:p-6 border-t shrink-0 space-y-4 sm:space-y-6 transition-colors duration-300 ${
               isDarkMode ? 'border-white/5 bg-blue-950/20' : 'border-gray-200/60 bg-gray-50/50'
             }`}>
               <section 
@@ -547,7 +930,9 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     {isDarkMode ? <Moon className="w-3.5 h-3.5 text-blue-400 group-hover/theme:rotate-12 transition-transform" /> : <Sun className="w-3.5 h-3.5 text-yellow-500 group-hover/theme:rotate-90 transition-transform" />}
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-600 dark:text-slate-200">
+                    <span className={`text-[10px] font-black uppercase tracking-widest transition-colors ${
+                      isDarkMode ? 'text-slate-300' : 'text-slate-600'
+                    }`}>
                       Theme
                     </span>
                   </div>
@@ -561,21 +946,101 @@ export default function App() {
 
               <div className="h-px bg-gray-200/60 dark:bg-blue-900/40 mx-2" />
 
-              <div className="space-y-1.5">
-                <p className="text-sm text-gray-400 dark:text-gray-500 font-bold tracking-tight">
-                  Developed with passion by
-                </p>
-                <a 
-                  href="https://github.com/SahilKhatkar11" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="text-xl font-black relative group inline-block transition-all duration-300"
+              <div className="max-w-3xl mx-auto px-4 text-center relative z-10">
+                <motion.div
+                  whileHover="hover"
+                  whileTap="hover"
+                  variants={{
+                    hover: { scale: 1.05, y: -5 }
+                  }}
+                  transition={{ type: "spring", stiffness: 300, damping: 15 }}
+                  className="flex flex-col items-center gap-2 cursor-pointer select-none"
                 >
-                  <span className="bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-600 bg-[length:0%_100%] bg-no-repeat group-hover:bg-[length:100%_100%] transition-all duration-700 bg-clip-text group-hover:text-transparent text-blue-600 dark:text-blue-400">
-                    Sahil Khatkar
-                  </span>
-                  <span className="absolute -bottom-1 left-0 w-full h-[2px] bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-700 origin-left shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
-                </a>
+                  <div className={`flex items-center gap-2 md:gap-3 px-4 md:px-8 py-3 md:py-4 rounded-2xl md:rounded-3xl border transition-all duration-500 ${
+                    isDarkMode
+                      ? 'bg-slate-900/80 border-blue-500/30 shadow-[0_0_30px_rgba(59,130,246,0.2)] backdrop-blur-md'
+                      : 'bg-white/80 border-blue-200 shadow-[0_0_30px_rgba(59,130,246,0.1)] backdrop-blur-md'
+                  }`}>
+                    <motion.span
+                      variants={{
+                        hover: {
+                          scale: [1, 1.3, 1, 1.3, 1],
+                          rotate: [0, 90, 180, 270, 360],
+                          filter: isDarkMode 
+                            ? [
+                                'drop-shadow(0 0 2px rgba(96,165,250,0.2))',
+                                'drop-shadow(0 0 12px rgba(96,165,250,0.9))',
+                                'drop-shadow(0 0 4px rgba(168,85,247,0.4))',
+                                'drop-shadow(0 0 12px rgba(168,85,247,0.9))',
+                                'drop-shadow(0 0 2px rgba(96,165,250,0.2))'
+                              ]
+                            : [
+                                'drop-shadow(0 0 2px rgba(59,130,246,0.2))',
+                                'drop-shadow(0 0 10px rgba(59,130,246,0.8))',
+                                'drop-shadow(0 0 3px rgba(147,51,234,0.3))',
+                                'drop-shadow(0 0 10px rgba(147,51,234,0.8))',
+                                'drop-shadow(0 0 2px rgba(59,130,246,0.2))'
+                              ]
+                        }
+                      }}
+                      transition={{
+                        duration: 1.5,
+                        repeat: Infinity,
+                        ease: "linear"
+                      }}
+                      className="inline-block"
+                    >
+                      <Sparkles className={`w-5 h-5 md:w-6 md:h-6 ${isDarkMode ? 'text-blue-400' : 'text-blue-500'}`} />
+                    </motion.span>
+                    <p className={`text-sm md:text-xl font-medium tracking-tight ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>
+                      Developed by{' '}
+                      <a
+                        href="https://github.com/sahilkhatkar11"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`font-black transition-all duration-300 relative group inline-block ${
+                          isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'
+                        }`}
+                      >
+                        Sahil Khatkar
+                        <span className={`absolute -bottom-1 left-0 w-0 h-1 transition-all duration-500 group-hover:w-full rounded-full ${
+                          isDarkMode ? 'bg-gradient-to-r from-blue-400 to-purple-400' : 'bg-gradient-to-r from-blue-600 to-purple-600'
+                        }`}></span>
+                      </a>
+                    </p>
+                    <motion.span
+                      variants={{
+                        hover: {
+                          scale: [1, 1.3, 1, 1.3, 1],
+                          rotate: [0, -90, -180, -270, -360],
+                          filter: isDarkMode 
+                            ? [
+                                'drop-shadow(0 0 2px rgba(96,165,250,0.2))',
+                                'drop-shadow(0 0 12px rgba(96,165,250,0.9))',
+                                'drop-shadow(0 0 4px rgba(168,85,247,0.4))',
+                                'drop-shadow(0 0 12px rgba(168,85,247,0.9))',
+                                'drop-shadow(0 0 2px rgba(96,165,250,0.2))'
+                              ]
+                            : [
+                                'drop-shadow(0 0 2px rgba(59,130,246,0.2))',
+                                'drop-shadow(0 0 10px rgba(59,130,246,0.8))',
+                                'drop-shadow(0 0 3px rgba(147,51,234,0.3))',
+                                'drop-shadow(0 0 10px rgba(147,51,234,0.8))',
+                                'drop-shadow(0 0 2px rgba(59,130,246,0.2))'
+                              ]
+                        }
+                      }}
+                      transition={{
+                        duration: 1.5,
+                        repeat: Infinity,
+                        ease: "linear"
+                      }}
+                      className="inline-block"
+                    >
+                      <Sparkles className={`w-5 h-5 md:w-6 md:h-6 ${isDarkMode ? 'text-blue-400' : 'text-blue-500'}`} />
+                    </motion.span>
+                  </div>
+                </motion.div>
               </div>
             </div>
           </motion.aside>
@@ -730,12 +1195,12 @@ export default function App() {
         </div>
       </header>
 
-      <div className={`flex flex-col min-h-screen transition-all duration-500 ${isSidebarOpen ? 'blur-md scale-[0.98] pointer-events-none grayscale-[0.5]' : ''}`}>
+      <div className={`flex flex-col min-h-screen w-full max-w-full overflow-x-hidden transition-all duration-500 ${isSidebarOpen ? 'blur-md scale-[0.98] pointer-events-none grayscale-[0.5]' : ''}`}>
 
       {/* Header Spacer to avoid content overlap with fixed header */}
       <div className="h-20" />
 
-      <main className="max-w-7xl mx-auto p-4 space-y-4 pb-12 transition-all">
+      <main className="w-full max-w-7xl mx-auto p-4 space-y-4 pb-12 transition-all min-w-0 overflow-x-hidden">
         {/* Team Input Area */}
         {!showFinalDashboard && (
           <section className={`p-4 sm:p-6 rounded-3xl border shadow-sm transition-all relative z-10 mx-auto w-full max-w-2xl ${
@@ -775,7 +1240,7 @@ export default function App() {
             <div className={`overflow-x-auto custom-scrollbar w-full border rounded-3xl shadow-sm transition-all ${
               isDarkMode ? 'bg-[#0f172a] border-white/5' : 'bg-white border-gray-200/60'
             }`}>
-                <table className="min-w-full w-max sm:w-full border-separate border-spacing-0">
+                <table className="min-w-full w-max border-separate border-spacing-0">
                   <thead>
                     <tr className={`border-b divide-x transition-colors ${
                       isDarkMode ? 'bg-[#1e293b] border-white/5 divide-white/5' : 'bg-slate-50 border-gray-200/60 divide-gray-200/60'
@@ -1007,6 +1472,39 @@ export default function App() {
                   );
                 })}
               </AnimatePresence>
+            </div>
+
+            {/* Export Options */}
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8 pb-12 max-w-2xl mx-auto px-4">
+              <motion.button
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                onClick={exportToPDF}
+                className={`w-full sm:w-auto flex items-center justify-center gap-2.5 px-8 py-4 rounded-2xl md:rounded-3xl font-black text-xs md:text-sm uppercase tracking-widest transition-all border shadow-lg hover:scale-105 active:scale-95 cursor-pointer select-none ${
+                  isDarkMode
+                    ? 'bg-[#1e293b] text-blue-400 border-blue-500/20 hover:bg-[#334155] hover:text-blue-300 shadow-blue-950/25'
+                    : 'bg-white text-blue-600 border-blue-200 hover:bg-blue-50/50 hover:text-blue-700 shadow-sm'
+                }`}
+              >
+                <FileDown className="w-4 h-4 md:w-5 md:h-5 text-blue-500 dark:text-blue-400" />
+                <span>Export Scores to PDF</span>
+              </motion.button>
+
+              <motion.button
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.38 }}
+                onClick={exportToCSV}
+                className={`w-full sm:w-auto flex items-center justify-center gap-2.5 px-8 py-4 rounded-2xl md:rounded-3xl font-black text-xs md:text-sm uppercase tracking-widest transition-all border shadow-lg hover:scale-105 active:scale-95 cursor-pointer select-none ${
+                  isDarkMode
+                    ? 'bg-[#1e293b] text-blue-400 border-blue-500/20 hover:bg-[#334155] hover:text-blue-300 shadow-blue-950/25'
+                    : 'bg-white text-blue-600 border-blue-200 hover:bg-blue-50/50 hover:text-blue-700 shadow-sm'
+                }`}
+              >
+                <FileSpreadsheet className="w-4 h-4 md:w-5 md:h-5 text-blue-500 dark:text-blue-400" />
+                <span>Export Scores to CSV</span>
+              </motion.button>
             </div>
           </section>
         )}
