@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, memo, useRef } from 'react';
 import { 
   Plus, 
   Minus,
@@ -30,7 +30,11 @@ import {
   HelpCircle,
   ChevronRight,
   FileDown,
-  FileSpreadsheet
+  FileSpreadsheet,
+  UserPlus,
+  Check,
+  History,
+  Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -44,6 +48,14 @@ interface RoundScore {
   teamId: string;
   roundIndex: number;
   points: number;
+}
+
+interface HistoryLogItem {
+  id: string;
+  timestamp: string;
+  type: 'score' | 'team' | 'round' | 'clear' | 'reset';
+  title: string;
+  detail: string;
 }
 
 const STORAGE_KEY = 'quizmaster-scoreboard-v2';
@@ -82,25 +94,58 @@ const ScorePilotLogo = ({ isDarkMode, className = "", onClick }: { isDarkMode: b
   </div>
 );
 
-/// Reusable Memoized Score Cell for performance
-const ScoreCell = memo(({ teamId, roundIndex, score, updateScore, isDarkMode }: { 
+// Reusable Memoized Score Cell for performance
+const ScoreCell = memo(({ 
+  teamId, 
+  roundIndex, 
+  score, 
+  updateScore, 
+  isDarkMode,
+  isActive,
+  onActivate
+}: { 
   teamId: string, 
   roundIndex: number, 
   score: number, 
   updateScore: (teamId: string, roundIndex: number, value: string) => void,
-  isDarkMode: boolean
+  isDarkMode: boolean,
+  isActive: boolean,
+  onActivate: () => void
 }) => {
+  const handleDecrement = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onActivate();
+    updateScore(teamId, roundIndex, (score - 1).toString());
+  };
+
+  const handleIncrement = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onActivate();
+    updateScore(teamId, roundIndex, (score + 1).toString());
+  };
+
   return (
-    <div className={`flex items-center justify-center gap-0.5 sm:gap-1 rounded-lg sm:rounded-xl border p-0.5 sm:p-1 transition-all group/score-cell ${
-      isDarkMode 
-        ? 'bg-blue-900/10 border-blue-900/30 focus-within:border-blue-500/50' 
-        : 'bg-slate-50 border-gray-100 focus-within:border-blue-200'
-    }`}>
+    <div 
+      data-score-cell="true"
+      onClick={onActivate}
+      className={`flex items-center justify-center gap-0.5 sm:gap-1 rounded-lg sm:rounded-xl border p-0.5 sm:p-1 transition-all cursor-pointer group/score-cell ${
+        isActive
+          ? (isDarkMode ? 'bg-blue-900/25 border-blue-500/60 shadow-sm shadow-blue-500/20' : 'bg-blue-50/50 border-blue-400 shadow-sm shadow-blue-500/10')
+          : (isDarkMode ? 'bg-blue-900/10 border-blue-900/30 hover:border-blue-900/50' : 'bg-slate-50 border-gray-100 hover:border-gray-200')
+      }`}
+    >
       <button 
-        onClick={() => updateScore(teamId, roundIndex, (score - 1).toString())}
-        className={`w-6 h-6 flex items-center justify-center rounded-lg transition-all md:opacity-0 group-hover/score-cell:opacity-100 group-focus-within/score-cell:opacity-100 ${
+        type="button"
+        onClick={handleDecrement}
+        className={`w-6 h-6 flex items-center justify-center rounded-lg transition-all duration-150 cursor-pointer ${
+          isActive 
+            ? 'opacity-100 scale-100 pointer-events-auto' 
+            : 'opacity-0 scale-90 group-hover/score-cell:opacity-100 group-hover/score-cell:scale-100 pointer-events-auto'
+        } ${
           isDarkMode ? 'hover:bg-red-900/30 text-red-400 active:bg-red-900/50' : 'hover:bg-red-50 text-red-500 active:bg-red-100'
         }`}
+        title="Decrease score"
+        aria-label="Decrease score"
       >
         <Minus className="w-2.5 h-2.5" strokeWidth={4} />
       </button>
@@ -108,19 +153,31 @@ const ScoreCell = memo(({ teamId, roundIndex, score, updateScore, isDarkMode }: 
         type="number"
         inputMode="numeric"
         value={score || ''}
+        onFocus={onActivate}
+        onClick={(e) => {
+          e.stopPropagation();
+          onActivate();
+        }}
         onChange={(e) => updateScore(teamId, roundIndex, e.target.value)}
         placeholder="0"
-        className={`w-8 sm:w-12 bg-transparent text-center font-mono text-base sm:text-xl font-black outline-none transition-colors appearance-none ${
+        className={`w-8 sm:w-12 bg-transparent text-center font-mono text-base sm:text-xl font-black outline-none transition-colors appearance-none cursor-text ${
           isDarkMode 
             ? 'text-white placeholder:text-blue-900/50 focus:text-blue-300' 
             : 'text-slate-900 placeholder:text-slate-200 focus:text-blue-600'
         }`}
       />
       <button 
-        onClick={() => updateScore(teamId, roundIndex, (score + 1).toString())}
-        className={`w-6 h-6 flex items-center justify-center rounded-lg transition-all md:opacity-0 group-hover/score-cell:opacity-100 group-focus-within/score-cell:opacity-100 ${
+        type="button"
+        onClick={handleIncrement}
+        className={`w-6 h-6 flex items-center justify-center rounded-lg transition-all duration-150 cursor-pointer ${
+          isActive 
+            ? 'opacity-100 scale-100 pointer-events-auto' 
+            : 'opacity-0 scale-90 group-hover/score-cell:opacity-100 group-hover/score-cell:scale-100 pointer-events-auto'
+        } ${
           isDarkMode ? 'hover:bg-green-900/30 text-green-400 active:bg-green-900/50' : 'hover:bg-green-50 text-green-500 active:bg-green-100'
         }`}
+        title="Increase score"
+        aria-label="Increase score"
       >
         <Plus className="w-2.5 h-2.5" strokeWidth={4} />
       </button>
@@ -146,18 +203,31 @@ const TeamHeader = memo(({ team, isActive, isEditing, tempName, setTempName, onU
     >
       <div className="flex flex-col items-center justify-center h-full gap-1 md:gap-2 transition-colors">
         {isEditing ? (
-          <div className="flex items-center gap-1 w-full px-1" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center gap-1 w-full px-0.5 sm:px-1" onClick={e => e.stopPropagation()}>
             <input
               type="text"
               value={tempName}
               onChange={e => setTempName(e.target.value)}
               autoFocus
-              className="w-full bg-white dark:bg-blue-950/40 border border-blue-400 dark:border-blue-500 rounded-lg px-2 py-1 text-xs font-black uppercase text-center text-slate-900 dark:text-white transition-colors shadow-sm"
+              className="flex-1 min-w-0 bg-white dark:bg-blue-950/40 border border-blue-400 dark:border-blue-500 rounded-lg px-1.5 py-1 text-[11px] sm:text-xs font-black uppercase text-center text-slate-900 dark:text-white transition-colors shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
               onKeyDown={e => {
                 if (e.key === 'Enter') onUpdate();
                 if (e.key === 'Escape') onCancel();
               }}
             />
+            <button
+              type="button"
+              onClick={onUpdate}
+              className={`p-1 rounded-lg border shadow-sm transition-all shrink-0 active:scale-95 ${
+                isDarkMode 
+                  ? 'bg-blue-600 text-white border-blue-400 hover:bg-blue-500' 
+                  : 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
+              }`}
+              title="Save changes"
+              aria-label="Save participant name"
+            >
+              <Check className="w-3.5 h-3.5 stroke-[3]" />
+            </button>
           </div>
         ) : (
           <span className={`text-[10px] sm:text-base md:text-xl font-black tracking-tight text-center uppercase break-words w-full leading-tight px-0.5 transition-colors group-hover:text-blue-600 dark:group-hover:text-blue-400 ${isDarkMode ? 'text-white' : 'text-slate-950'}`}>
@@ -211,8 +281,99 @@ export default function App() {
   const [activeRoundIndex, setActiveRoundIndex] = useState<number | null>(null);
   const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
   const [tempTeamName, setTempTeamName] = useState('');
+  const [activeScoreCell, setActiveScoreCell] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [showAddParticipant, setShowAddParticipant] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('scorepilot_show_add_participant');
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    }
+    return true;
+  });
+  const [showHistoryLogs, setShowHistoryLogs] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('scorepilot_show_history_logs');
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    }
+    return false;
+  });
+  const [historyLogs, setHistoryLogs] = useState<HistoryLogItem[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('scorepilot_history_logs');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    }
+    return [];
+  });
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const savedTheme = localStorage.getItem('scorepilot_theme');
+      if (savedTheme === 'dark') return true;
+      if (savedTheme === 'light') return false;
+      return Boolean(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }
+    return false;
+  });
+  const logsContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll history logs container to top whenever changes are made and logs are updated
+  useEffect(() => {
+    if (logsContainerRef.current) {
+      logsContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [historyLogs]);
+
+  // Listen to system/browser theme changes automatically when user has not set an explicit override
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleSystemThemeChange = (e: MediaQueryListEvent) => {
+      const savedTheme = localStorage.getItem('scorepilot_theme');
+      if (!savedTheme) {
+        setIsDarkMode(e.matches);
+      }
+    };
+
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleSystemThemeChange);
+      return () => mediaQuery.removeEventListener('change', handleSystemThemeChange);
+    } else if (mediaQuery.addListener) {
+      mediaQuery.addListener(handleSystemThemeChange);
+      return () => mediaQuery.removeListener(handleSystemThemeChange);
+    }
+  }, []);
+
+  // Sync dark class to html document element
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      if (isDarkMode) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    }
+  }, [isDarkMode]);
+
+  // Deselect active score cell when clicking outside any score cell
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest('[data-score-cell="true"]')) {
+        setActiveScoreCell(null);
+      }
+    };
+    window.addEventListener('click', handleOutsideClick);
+    return () => window.removeEventListener('click', handleOutsideClick);
+  }, []);
 
   // History management
   const pushToHistory = useCallback(() => {
@@ -223,7 +384,7 @@ export default function App() {
       calculatedScores: { ...calculatedScores },
       quizTitle
     };
-    setHistory(prev => [currentState, ...prev].slice(0, 20)); // Store up to 20 steps
+    setHistory(prev => [currentState, ...prev].slice(0, 50)); // Store up to 50 steps
     setRedoStack([]); // Clear redo stack on new action
   }, [teams, rounds, scores, calculatedScores, quizTitle]);
 
@@ -269,6 +430,144 @@ export default function App() {
     setRounds(nextState.rounds);
     setScores(nextState.scores);
     setCalculatedScores(nextState.calculatedScores);
+    setQuizTitle(nextState.quizTitle);
+    setRedoStack(remainingRedo);
+  }, [redoStack, teams, rounds, scores, calculatedScores, quizTitle]);
+
+  // Load from local storage
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setQuizTitle(parsed.quizTitle || 'DCSE, CDLU Sirsa');
+        setTeams(parsed.teams || []);
+        setRounds(parsed.rounds || 3);
+        setScores(parsed.scores || []);
+        setCalculatedScores(parsed.calculatedScores || {});
+      } catch (e) {
+        console.error('Failed to load scoreboard data', e);
+      }
+    }
+    setIsLoaded(true);
+  }, []);
+
+  // Save to local storage
+  useEffect(() => {
+    if (isLoaded) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        quizTitle,
+        teams,
+        rounds,
+        scores,
+        calculatedScores
+      }));
+    }
+  }, [quizTitle, teams, rounds, scores, calculatedScores, isLoaded]);
+
+  const addLog = useCallback((type: 'score' | 'team' | 'round' | 'clear' | 'reset', title: string, detail: string) => {
+    const now = new Date();
+    const timestamp = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const newLog: HistoryLogItem = {
+      id: crypto.randomUUID(),
+      timestamp,
+      type,
+      title,
+      detail,
+    };
+    setHistoryLogs(prev => {
+      const updated = [newLog, ...prev].slice(0, 100);
+      try {
+        localStorage.setItem('scorepilot_history_logs', JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return updated;
+    });
+  }, []);
+
+  const toggleShowHistoryLogs = useCallback(() => {
+    setShowHistoryLogs(prev => {
+      const next = !prev;
+      localStorage.setItem('scorepilot_show_history_logs', String(next));
+      return next;
+    });
+  }, []);
+
+  const clearHistoryLogs = useCallback(() => {
+    setHistoryLogs([]);
+    localStorage.removeItem('scorepilot_history_logs');
+  }, []);
+
+  const addTeam = useCallback(() => {
+    if (!newTeamName.trim()) return;
+    pushToHistory();
+    const trimmed = newTeamName.trim();
+    const newTeam: Team = {
+      id: crypto.randomUUID(),
+      name: trimmed,
+    };
+    setTeams(prev => [...prev, newTeam]);
+    setNewTeamName('');
+    addLog('team', 'Participant Added', `Added "${trimmed}"`);
+  }, [newTeamName, pushToHistory, addLog]);
+
+  const updateTeamName = useCallback((id: string, name: string) => {
+    if (!name.trim()) return;
+    pushToHistory();
+    const currentTeam = teams.find(t => t.id === id);
+    const trimmed = name.trim();
+    setTeams(prev => prev.map(t => t.id === id ? { ...t, name: trimmed } : t));
+    setEditingTeamId(null);
+    addLog('team', 'Participant Renamed', `Renamed "${currentTeam?.name || 'Participant'}" to "${trimmed}"`);
+  }, [teams, pushToHistory, addLog]);
+
+  const removeTeam = useCallback((id: string) => {
+    pushToHistory();
+    const removedTeam = teams.find(t => t.id === id);
+    setTeams(prevTeams => prevTeams.filter(t => t.id !== id));
+    setScores(prevScores => prevScores.filter(s => s.teamId !== id));
+    setCalculatedScores(prevCalculated => {
+      const newCalculated = { ...prevCalculated };
+      delete newCalculated[id];
+      return newCalculated;
+    });
+    addLog('team', 'Participant Removed', `Removed "${removedTeam?.name || 'Participant'}"`);
+  }, [teams, pushToHistory, addLog]);
+
+  const addRound = useCallback(() => {
+    pushToHistory();
+    setRounds(prev => {
+      const next = prev + 1;
+      addLog('round', 'Round Added', `Added Round #${next}`);
+      return next;
+    });
+  }, [pushToHistory, addLog]);
+
+  const removeRound = useCallback(() => {
+    if (rounds > 1) {
+      pushToHistory();
+      addLog('round', 'Round Removed', `Removed Round #${rounds}`);
+      setRounds(prev => prev - 1);
+    }
+  }, [pushToHistory, rounds, addLog]);
+
+  const updateScore = useCallback((teamId: string, roundIndex: number, value: string) => {
+    const points = parseInt(value) || 0;
+    const currentScore = scores.find(s => s.teamId === teamId && s.roundIndex === roundIndex);
+    const currentPoints = currentScore ? currentScore.points : 0;
+    
+    if (points === currentPoints && (currentScore !== undefined || (points === 0 && value === ''))) {
+      return;
+    }
+
+    pushToHistory();
+    const teamName = teams.find(t => t.id === teamId)?.name || 'Participant';
+    addLog('score', 'Score Updated', `${teamName} (Round #${roundIndex + 1}): ${points} pts (was ${currentPoints})`);
+
+    setScores(prev => {
+      const existingIndex = prev.findIndex(s => s.teamId === teamId && s.roundIndex === roundIndex);
+      if (existingIn  setCalculatedScores(nextState.calculatedScores);
     setQuizTitle(nextState.quizTitle);
     setRedoStack(remainingRedo);
   }, [redoStack, teams, rounds, scores, calculatedScores, quizTitle]);
