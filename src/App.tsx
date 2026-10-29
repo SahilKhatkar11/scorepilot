@@ -375,6 +375,294 @@ export default function App() {
     return () => window.removeEventListener('click', handleOutsideClick);
   }, []);
 
+  const addLog = useCallback((type: 'score' | 'team' | 'round' | 'clear' | 'reset', title: string, detail: string) => {
+    const now = new Date();
+    const timestamp = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const newLog: HistoryLogItem = {
+      id: crypto.randomUUID(),
+      timestamp,
+      type,
+      title,
+      detail,
+    };
+    setHistoryLogs(prev => {
+      const updated = [newLog, ...prev].slice(0, 100);
+      try {
+        localStorage.setItem('scorepilot_history_logs', JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return updated;
+    });
+  }, []);
+
+  const toggleShowHistoryLogs = useCallback(() => {
+    setShowHistoryLogs(prev => {
+      const next = !prev;
+      localStorage.setItem('scorepilot_show_history_logs', String(next));
+      return next;
+    });
+  }, []);
+
+  const clearHistoryLogs = useCallback(() => {
+    setHistoryLogs([]);
+    localStorage.removeItem('scorepilot_history_logs');
+  }, []);
+
+  // History management
+  const pushToHistory = useCallback(() => {
+    const currentState = {
+      teams: [...teams],
+      rounds,
+      scores: [...scores],
+      calculatedScores: { ...calculatedScores },
+      quizTitle
+    };
+    setHistory(prev => [currentState, ...prev].slice(0, 50)); // Store up to 50 steps
+    setRedoStack([]); // Clear redo stack on new action
+  }, [teams, rounds, scores, calculatedScores, quizTitle]);
+
+  const undo = useCallback(() => {
+    if (history.length === 0) return;
+    const [lastState, ...remainingHistory] = history;
+    
+    // Save current state to redo stack
+    const currentState = {
+      teams: [...teams],
+      rounds,
+      scores: [...scores],
+      calculatedScores: { ...calculatedScores },
+      quizTitle
+    };
+    setRedoStack(prev => [currentState, ...prev]);
+
+    // Restore last state
+    setTeams(lastState.teams);
+    setRounds(lastState.rounds);
+    setScores(lastState.scores);
+    setCalculatedScores(lastState.calculatedScores);
+    setQuizTitle(lastState.quizTitle);
+    setHistory(remainingHistory);
+    addLog('reset', 'Action Undone', 'Reverted previous action');
+  }, [history, teams, rounds, scores, calculatedScores, quizTitle, addLog]);
+
+  const redo = useCallback(() => {
+    if (redoStack.length === 0) return;
+    const [nextState, ...remainingRedo] = redoStack;
+
+    // Save current state to history
+    const currentState = {
+      teams: [...teams],
+      rounds,
+      scores: [...scores],
+      calculatedScores: { ...calculatedScores },
+      quizTitle
+    };
+    setHistory(prev => [currentState, ...prev]);
+
+    // Restore next state
+    setTeams(nextState.teams);
+    setRounds(nextState.rounds);
+    setScores(nextState.scores);
+    setCalculatedScores(nextState.calculatedScores);
+    setQuizTitle(nextState.quizTitle);
+    setRedoStack(remainingRedo);
+    addLog('reset', 'Action Redone', 'Reapplied previous action');
+  }, [redoStack, teams, rounds, scores, calculatedScores, quizTitle, addLog]);
+
+  // Load from local storage
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setQuizTitle(parsed.quizTitle || 'DCSE, CDLU Sirsa');
+        setTeams(parsed.teams || []);
+        setRounds(parsed.rounds || 3);
+        setScores(parsed.scores || []);
+        setCalculatedScores(parsed.calculatedScores || {});
+      } catch (e) {
+        console.error('Failed to load scoreboard data', e);
+      }
+    }
+    setIsLoaded(true);
+  }, []);
+
+  // Save to local storage
+  useEffect(() => {
+    if (isLoaded) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        quizTitle,
+        teams,
+        rounds,
+        scores,
+        calculatedScores
+      }));
+    }
+  }, [quizTitle, teams, rounds, scores, calculatedScores, isLoaded]);
+
+  const addTeam = useCallback(() => {
+    if (!newTeamName.trim()) return;
+    pushToHistory();
+    const trimmed = newTeamName.trim();
+    const newTeam: Team = {
+      id: crypto.randomUUID(),
+      name: trimmed,
+    };
+    setTeams(prev => [...prev, newTeam]);
+    setNewTeamName('');
+    addLog('team', 'Participant Added', `Added "${trimmed}"`);
+  }, [newTeamName, pushToHistory, addLog]);
+
+  const updateTeamName = useCallback((id: string, name: string) => {
+    if (!name.trim()) return;
+    pushToHistory();
+    const currentTeam = teams.find(t => t.id === id);
+    const trimmed = name.trim();
+    setTeams(prev => prev.map(t => t.id === id ? { ...t, name: trimmed } : t));
+    setEditingTeamId(null);
+    addLog('team', 'Participant Renamed', `Renamed "${currentTeam?.name || 'Participant'}" to "${trimmed}"`);
+  }, [teams, pushToHistory, addLog]);
+
+  const removeTeam = useCallback((id: string) => {
+    pushToHistory();
+    const removedTeam = teams.find(t => t.id === id);
+    setTeams(prevTeams => prevTeams.filter(t => t.id !== id));
+    setScores(prevScores => prevScores.filter(s => s.teamId !== id));
+    setCalculatedScores(prevCalculated => {
+      const newCalculated = { ...prevCalculated };
+      delete newCalculated[id];
+      return newCalculated;
+    });
+    addLog('team', 'Participant Removed', `Removed "${removedTeam?.name || 'Participant'}"`);
+  }, [teams, pushToHistory, addLog]);
+
+  const addRound = useCallback(() => {
+    pushToHistory();
+    setRounds(prev => {
+      const next = prev + 1;
+      addLog('round', 'Round Added', `Added Round #${next}`);
+      return next;
+    });
+  }, [pushToHistory, addLog]);
+
+  const removeRound = useCallback(() => {
+    if (rounds > 1) {
+      pushToHistory();
+      addLog('round', 'Round Removed', `Removed Round #${rounds}`);
+      setRounds(prev => prev - 1);
+    }
+  }, [pushToHistory, rounds, addLog]);
+
+  const updateScore = useCallback((teamId: string, roundIndex: number, value: string) => {
+    const points = parseInt(value) || 0;
+    const currentScore = scores.find(s => s.teamId === teamId && s.roundIndex === roundIndex);
+    const currentPoints = currentScore ? currentScore.points : 0;
+    
+    if (points === currentPoints && (currentScore !== undefined || (points === 0 && value === ''))) {
+      return;
+    }
+
+    pushToHistory();
+    const teamName = teams.find(t => t.id === teamId)?.name || 'Participant';
+    addLog('score', 'Score Updated', `${teamName} (Round #${roundIndex + 1}): ${points} pts (was ${currentPoints})`eamId, setActiveTeamId] = useState<string | null>(null);
+  const [activeRoundIndex, setActiveRoundIndex] = useState<number | null>(null);
+  const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
+  const [tempTeamName, setTempTeamName] = useState('');
+  const [activeScoreCell, setActiveScoreCell] = useState<string | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [showAddParticipant, setShowAddParticipant] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('scorepilot_show_add_participant');
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    }
+    return true;
+  });
+  const [showHistoryLogs, setShowHistoryLogs] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('scorepilot_show_history_logs');
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    }
+    return false;
+  });
+  const [historyLogs, setHistoryLogs] = useState<HistoryLogItem[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('scorepilot_history_logs');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    }
+    return [];
+  });
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const savedTheme = localStorage.getItem('scorepilot_theme');
+      if (savedTheme === 'dark') return true;
+      if (savedTheme === 'light') return false;
+      return Boolean(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }
+    return false;
+  });
+  const logsContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll history logs container to top whenever changes are made and logs are updated
+  useEffect(() => {
+    if (logsContainerRef.current) {
+      logsContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [historyLogs]);
+
+  // Listen to system/browser theme changes automatically when user has not set an explicit override
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleSystemThemeChange = (e: MediaQueryListEvent) => {
+      const savedTheme = localStorage.getItem('scorepilot_theme');
+      if (!savedTheme) {
+        setIsDarkMode(e.matches);
+      }
+    };
+
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleSystemThemeChange);
+      return () => mediaQuery.removeEventListener('change', handleSystemThemeChange);
+    } else if (mediaQuery.addListener) {
+      mediaQuery.addListener(handleSystemThemeChange);
+      return () => mediaQuery.removeListener(handleSystemThemeChange);
+    }
+  }, []);
+
+  // Sync dark class to html document element
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      if (isDarkMode) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    }
+  }, [isDarkMode]);
+
+  // Deselect active score cell when clicking outside any score cell
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest('[data-score-cell="true"]')) {
+        setActiveScoreCell(null);
+      }
+    };
+    window.addEventListener('click', handleOutsideClick);
+    return () => window.removeEventListener('click', handleOutsideClick);
+  }, []);
+
   // History management
   const pushToHistory = useCallback(() => {
     const currentState = {
